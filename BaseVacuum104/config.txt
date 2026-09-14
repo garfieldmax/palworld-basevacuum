@@ -1,0 +1,30 @@
+# BaseVacuum104 v1.0.0
+# Final conservative server-only base ground-drop quick-stack.
+
+Enabled = 1
+
+# How often to scan for physical ground drops inside bases.
+# Unit: seconds. Minimum enforced value is 3.
+ScanIntervalSeconds = 15
+
+# Maximum PHYSICAL GROUND-DROP OBJECTS handled in one scan/batch.
+# Default 50; configurable from 1 to 500.
+MaxDropsPerScan = 50
+
+# A newly-seen drop must survive this many previous scans before processing.
+# 1 = one full scan interval of settling time (15s with the default above).
+SettleScans = 1
+
+# Safety limit for the item count inside one physical ground-drop stack.
+# This is separate from MaxDropsPerScan. Raise/lower only if you intentionally
+# use unusual stack-size mods.
+MaxDropStack = 9999
+
+# Shared Guild Chest uses a different storage path; leave it alone.
+SkipGuildChest = 1
+
+# Log successful quick-stack moves.
+LogMoves = 1
+
+# Extra diagnostics.
+Debug = 0
