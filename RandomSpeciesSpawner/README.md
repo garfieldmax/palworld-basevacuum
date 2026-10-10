@@ -1,120 +1,129 @@
-# RandomSpeciesSpawner v0.1.5
+# RandomSpeciesSpawner v0.2.0
 
-Experimental UE4SS Lua prototype for a Palworld world with **randomized ordinary overworld species** while leaving authored encounters alone.
+UE4SS Lua prototype for a Palworld world with **randomized ordinary overworld species and species-native levels**, while authored bosses, dungeons and scripted encounters remain under vanilla control.
 
-This is the first version that correctly changes the **first visible spawn** from a fresh world/streamed area without mutating spawner objects during construction.
+## Current architecture
 
-## Current behavior
+The runtime uses three independent data layers:
 
-- Palworld's built-in randomizer should be **OFF** (`RandomizerType=None`).
-- Ordinary overworld wildlife is randomized from the curated non-legendary species pool.
-- The replacement is selected deterministically from:
-  - mod `Seed`
-  - physical spawner runtime identity
-  - `SpawnerName`
-  - original `PalId`
-- The current build changes **species only**.
-- The replacement keeps the **vanilla level of the original spawn slot**.
+- `Scripts/spawn_allowlist.lua` — WHERE randomization is allowed
+- `Scripts/species_catalog.lua` — WHAT species may be selected
+- `Scripts/species_bands.lua` — AT WHAT LEVEL the replacement appears
 
-That last point matters. Most starter-area replacements will therefore be level 1-3, but a naturally high-level vanilla slot can still produce a high-level replacement. For example, a level-29 Mammorest/GrassMammoth slot can become a different species at level 29.
+See [DATA.md](DATA.md) for provenance and update policy and [DESIGN.md](DESIGN.md) for the longer-term target.
 
-This level behavior is useful for validating the hook, but it is **not the final design target**. See [DESIGN.md](DESIGN.md).
+## Runtime hook
 
-## Why this hook
-
-The standard spawner path reaches:
-
-```text
-selected SpawnGroup / Pal
-    -> GetSpawnLevelRandom_OneTribe
-    -> PalUtility:GetInitializedCharacterSaveParemter
-    -> CharacterManager:SpawnNewCharacter
-```
-
-v0.1.5 hooks the native pre-call:
+The working interception point is:
 
 ```text
 /Script/Pal.PalUtility:GetInitializedCharacterSaveParemter
 ```
 
-and changes the incoming `CharacterID` before Palworld constructs the final `FPalIndividualCharacterSaveParameter`.
+The Standard spawner has already selected an authored Pal by this point, but Palworld has not yet built the final character save parameter. The native pre-hook can therefore safely replace:
 
-This gives us the important properties we wanted:
+```text
+CharacterID -> deterministic replacement species
+Level       -> deterministic value in that species' native band
+```
 
-- works on the first spawn
-- no constructor-time mutation
-- no retained world-partition UObject references
-- no delayed callbacks
-- no `SpawnGroupList` mutation
-- Palworld resolves the replacement Pal normally after the substitution
+before Palworld resolves/spawns the character.
 
-## Scope / safety gate
+No `SpawnGroupList` mutation is used.
 
-`PalUtility:GetInitializedCharacterSaveParemter` is used by many systems, so the mod is deliberately fail-closed.
+## Target behavior implemented in v0.2.0
 
-A replacement happens only when:
+```text
+ordinary overworld:
+    random eligible non-legendary species
+    + replacement species-native level band
 
-1. `WorldContextObject` exposes a `SpawnerName`
-2. that `SpawnerName` exists in the curated ordinary-wildlife `spawn_defaults.lua`
-3. the original `CharacterID` is also an allowed Pal for that same sheet
-4. the process has standalone/server authority
+dungeons:
+    vanilla
 
-The curated table excludes known field bosses, BOSS/FBOSS sheets, quest/predator/scripted encounters, humans/NPC sources, enemy-basecamp-style sources, and other unproven special families.
+field bosses / BOSS / FBOSS:
+    vanilla
 
-Unique legendary IDs are additionally blocked from the replacement pool.
+unique legends:
+    vanilla and excluded from replacement pool
+
+cages / Syndicate / humans / NPCs:
+    vanilla
+
+quest / predator / scripted encounters:
+    vanilla
+```
+
+The source gate remains fail-closed.
+
+## Stable local ecology
+
+Species mapping is deterministic from:
+
+```text
+Seed
++ physical spawner runtime identity
++ SpawnerName
++ original PalId
+```
+
+So the same physical spawn point should repeatedly map an authored Pal to the same replacement during normal operation, while another physical location using the same sheet may map differently.
+
+Level is chosen deterministically within the replacement's band and also incorporates the incoming vanilla level, allowing normal slot-level variation to create some variation inside the native band.
+
+## Data counts
+
+At this revision:
+
+- source snapshot: 1,102 curated ordinary-wildlife rows
+- unique allowed source pairs: 1095
+- species bands: 302 CharacterIDs
+- replacement catalog: 290 eligible CharacterIDs
+
+The replacement catalog deliberately does not come from the source allowlist anymore.
 
 ## Install
-
-UE4SS mod layout:
 
 ```text
 RandomSpeciesSpawner/
 ├── enabled.txt
 ├── README.md
+├── DATA.md
 ├── DESIGN.md
 └── Scripts/
     ├── main.lua
     ├── config.lua
-    └── spawn_defaults.lua
+    ├── spawn_allowlist.lua
+    ├── species_catalog.lua
+    └── species_bands.lua
 ```
 
-Copy `RandomSpeciesSpawner` into your UE4SS `Mods` directory.
-
-For this validation build:
-
-- set Palworld `RandomizerType=None`
-- disable the older `RandomSpawnLevels` test mod
-- restart the game/world
-
-Typical successful log:
+Use with:
 
 ```text
-[RandomSpeciesSpawner v0.1.5-characterid] DATA | EligibleRows=1102 | RandomPool=222 | Scope=ordinary-wildlife
-[RandomSpeciesSpawner v0.1.5-characterid] REPLACE | INITPRE | Sheet=green_A | PinkCat -> VolcanoDragon | Level=3
+RandomizerType=None
 ```
 
-## Configuration
+Disable the older RandomSpawnLevels experiment while validating this build.
 
-Edit `Scripts/config.lua`.
+## Expected log
 
-- `Seed`: regenerates the deterministic ecology.
-- `AvoidOriginal`: prevents a slot from resolving back to its original Pal when possible.
-- `Debug`: enable replacement logs.
-- `MaxDebugLogs`: cap detailed log volume.
+```text
+DATA | SourcePairs=1095 | SpeciesBands=302 | CandidatePool=290 | MissingBands=0
 
-## Validation status
+REPLACE | INITPRE | Sheet=green_A |
+    PinkCat -> VolcanoDragon |
+    VanillaLevel=3 |
+    NativeBand=32..34 |
+    FinalLevel=33
+```
 
-Validated in standalone play on 2026-10-10 with fresh-world/streamed-area spawns. The CharacterID pre-hook produced replacement species immediately and preserved the original slot level.
+## Status
 
-Dedicated-server behavior is intended by the authority gate but should be revalidated separately before calling this production-ready.
+v0.1.5 established that CharacterID replacement at this pre-hook works correctly from a fresh start.
 
-## Development history
+v0.2.0 adds the separated data model and native level rewrite. The level write is the new part that needs runtime validation.
 
-Earlier experiments are documented in [DESIGN.md](DESIGN.md). In short:
-
-- constructor-time `NotifyOnNewObject` mutation worked but crashed during world load
-- level-hook post mutation was safe but one spawn too late
-- base `BlueprintTick_Spawning` hook did not execute for the generated Standard spawner
-- the CharacterID initialization pre-hook is the first clean interception point found so far
+If the level mutation unexpectedly fails, the code attempts to roll CharacterID back to the original species rather than leaving a powerful replacement at the original low level.
 
 MIT license via the repository root.
